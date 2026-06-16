@@ -6,9 +6,11 @@ import {
   devLogin,
   getToken,
   listMessages,
+  listProviders,
   listSessions,
   sendMessage,
   type Message,
+  type ProviderInfo,
   type Session,
 } from "@/lib/api";
 import styles from "./page.module.css";
@@ -24,6 +26,8 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [blockAlert, setBlockAlert] = useState<string[] | null>(null);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [provider, setProvider] = useState<string>("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = () => bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -44,6 +48,13 @@ export default function ChatPage() {
       if (!getToken()) await devLogin();
       setAuthenticated(true);
       await loadSessions();
+      try {
+        const info = await listProviders();
+        setProviders(info.providers);
+        setProvider(info.active);
+      } catch {
+        /* providers list is best-effort */
+      }
     };
     init().catch(console.error);
   }, [loadSessions]);
@@ -110,7 +121,8 @@ export default function ChatPage() {
           if (data.pii_redacted) setStatus("PII foi redigido antes do envio ao LLM");
           setStreaming("");
         },
-        (err) => setStatus(`Erro: ${err}`)
+        (err) => setStatus(`Erro: ${err}`),
+        provider || undefined
       );
 
       if (result.blocked && result.reasons) {
@@ -138,6 +150,19 @@ export default function ChatPage() {
           <button className={styles.newChatBtn} onClick={handleNewChat}>
             + Novo chat
           </button>
+          {providers.length > 0 && (
+            <label className={styles.modelSelect}>
+              <span>Modelo</span>
+              <select value={provider} onChange={(e) => setProvider(e.target.value)}>
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                    {p.default_model ? ` — ${p.default_model}` : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
         <nav className={styles.sessionList}>
           {sessions.map((s) => (

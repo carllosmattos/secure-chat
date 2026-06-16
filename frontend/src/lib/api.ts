@@ -52,6 +52,24 @@ export interface Message {
   created_at: string;
 }
 
+export interface ProviderInfo {
+  id: string;
+  label: string;
+  default_model: string | null;
+}
+
+export interface ProvidersResponse {
+  active: string;
+  auto_strategy: string;
+  auto_providers: string[];
+  providers: ProviderInfo[];
+}
+
+export async function listProviders(): Promise<ProvidersResponse> {
+  const res = await apiFetch("/api/llm/providers");
+  return res.json();
+}
+
 export async function listSessions(): Promise<Session[]> {
   const res = await apiFetch("/api/sessions");
   return res.json();
@@ -84,12 +102,16 @@ export async function sendMessage(
   files: File[],
   onToken: (text: string) => void,
   onDone: (data: { content: string; pii_redacted: boolean }) => void,
-  onError: (msg: string) => void
+  onError: (msg: string) => void,
+  provider?: string,
+  model?: string
 ): Promise<SendMessageResult> {
   const token = getToken();
   const form = new FormData();
   form.append("content", content);
   for (const f of files) form.append("files", f);
+  if (provider) form.append("provider", provider);
+  if (model) form.append("model", model);
 
   const res = await fetch(`${API_URL}/api/sessions/${sessionId}/messages`, {
     method: "POST",

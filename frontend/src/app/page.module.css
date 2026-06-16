@@ -35,6 +35,30 @@
   background: var(--accent-hover);
 }
 
+.modelSelect {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-top: 0.75rem;
+}
+
+.modelSelect span {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.modelSelect select {
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  background: var(--surface-hover);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.82rem;
+}
+
 .sessionList {
   flex: 1;
   overflow-y: auto;

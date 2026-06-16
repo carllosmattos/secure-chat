@@ -10,7 +10,7 @@ from sse_starlette.sse import EventSourceResponse
 
 from app.auth import AuthUser, create_access_token, get_current_user
 from app.database import get_db
-from app.llm.provider import get_llm_provider
+from app.llm.provider import get_llm_provider, provider_catalog
 from app.models import Message, User
 from app.schemas import (
     AuthTokenResponse,
@@ -41,6 +41,18 @@ async def dev_login(body: DevLoginRequest, db: AsyncSession = Depends(get_db)):
         await db.refresh(user)
     token = create_access_token(user.id, user.email)
     return AuthTokenResponse(access_token=token)
+
+
+@router.get("/llm/providers")
+async def list_llm_providers():
+    from app.config import settings
+
+    return {
+        "active": settings.llm_provider,
+        "auto_strategy": settings.llm_auto_strategy,
+        "auto_providers": [p.strip() for p in settings.llm_auto_providers.split(",") if p.strip()],
+        "providers": provider_catalog(),
+    }
 
 
 @router.get("/sessions", response_model=list[SessionOut])
@@ -87,6 +99,8 @@ async def send_message(
     session_id: uuid.UUID,
     content: str = Form(...),
     files: list[UploadFile] = File(default=[]),
+    provider: str | None = Form(default=None),
+    model: str | None = Form(default=None),
     user: AuthUser = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -142,7 +156,7 @@ async def send_message(
     db.add(user_msg)
     await db.commit()
 
-    llm = get_llm_provider()
+    llm = get_llm_provider(provider)
     history = await chat_service.list_messages(db, session_id)
     llm_messages = [{"role": m.role, "content": m.content_redacted} for m in history]
     llm_messages.append({"role": "user", "content": pipeline.redacted_text})
@@ -150,7 +164,7 @@ async def send_message(
     async def event_generator():
         full_response = ""
         try:
-            async for chunk in llm.stream_completion(llm_messages):
+            async for chunk in llm.stream_completion(llm_messages, model=model):
                 full_response += chunk
                 yield {"event": "token", "data": json.dumps({"text": chunk})}
         except Exception as exc:
