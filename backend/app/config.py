@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     vault_ttl_seconds: int = 3600
     vault_encryption_key: str = "dev-vault-key-32bytes-change-me!!"
 
-    llm_provider: str = "mock"  # mock | bedrock | vertex
+    llm_provider: str = "mock"  # mock | ollama | bedrock | vertex
+    ollama_base_url: str = "http://localhost:11434"
+    ollama_model: str = "llama3"
     bedrock_region: str = "us-east-1"
     bedrock_model_id: str = "anthropic.claude-3-opus-20240229-v1:0"
     vertex_project: str = ""

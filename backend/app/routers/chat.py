@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import uuid
 
@@ -19,6 +20,7 @@ from app.schemas import (
     MessageOut,
     SessionCreate,
     SessionOut,
+    SessionUpdate,
 )
 from app.services import chat as chat_service
 from app.services.pipeline import PipelineBlockError, process_message_pipeline
@@ -26,6 +28,14 @@ from app.services.quota import QuotaExceededError, check_and_increment_quota
 from app.services.vault import rehydrate, vault
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+_PLACEHOLDER_RE = re.compile(r"\[[A-Z]+_\d+\]")
+
+
+def _display_content(text: str, mapping: dict[str, str]) -> str:
+    if not mapping or not _PLACEHOLDER_RE.search(text):
+        return text
+    return rehydrate(text, mapping)
 
 
 @router.post("/auth/dev-login", response_model=AuthTokenResponse)
@@ -57,6 +67,31 @@ async def create_session(
     return await chat_service.create_session(db, user, body.title)
 
 
+@router.patch("/sessions/{session_id}", response_model=SessionOut)
+async def rename_session(
+    session_id: uuid.UUID,
+    body: SessionUpdate,
+    user: AuthUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await chat_service.update_session(db, user, session_id, body.title)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    return session
+
+
+@router.delete("/sessions/{session_id}", status_code=204)
+async def remove_session(
+    session_id: uuid.UUID,
+    user: AuthUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    deleted = await chat_service.delete_session(db, user, session_id)
+    if not deleted:
+        raise HTTPException(404, "Session not found")
+    vault.clear(session_id)
+
+
 @router.get("/sessions/{session_id}/messages", response_model=list[MessageOut])
 async def get_messages(
     session_id: uuid.UUID,
@@ -72,7 +107,7 @@ async def get_messages(
         MessageOut(
             id=m.id,
             role=m.role,
-            content=rehydrate(m.content_redacted, mapping),
+            content=_display_content(m.content_redacted, mapping),
             pii_redacted=m.pii_redacted,
             blocked=m.blocked,
             attachment_names=m.attachment_names or [],
@@ -105,6 +140,9 @@ async def send_message(
             file_tuples.append((f.filename, await f.read()))
 
     start = time.perf_counter()
+    existing_messages = await chat_service.list_messages(db, session_id)
+    is_first_message = len(existing_messages) == 0
+
     try:
         pipeline = await process_message_pipeline(session_id, content, file_tuples)
     except PipelineBlockError as exc:
@@ -142,10 +180,13 @@ async def send_message(
     db.add(user_msg)
     await db.commit()
 
+    new_title = await chat_service.maybe_set_session_title(
+        db, session, pipeline.redacted_text, is_first_message
+    )
+
     llm = get_llm_provider()
     history = await chat_service.list_messages(db, session_id)
     llm_messages = [{"role": m.role, "content": m.content_redacted} for m in history]
-    llm_messages.append({"role": "user", "content": pipeline.redacted_text})
 
     async def event_generator():
         full_response = ""
@@ -189,6 +230,7 @@ async def send_message(
                     "message_id": str(assistant_msg.id),
                     "content": rehydrated,
                     "pii_redacted": pipeline.pii_redacted,
+                    "session_title": new_title,
                 }
             ),
         }

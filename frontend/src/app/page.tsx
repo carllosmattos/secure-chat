@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   createSession,
+  deleteSession,
   devLogin,
   getToken,
   listMessages,
   listSessions,
   sendMessage,
+  updateSession,
   type Message,
   type Session,
 } from "@/lib/api";
@@ -24,20 +26,43 @@ export default function ChatPage() {
   const [streaming, setStreaming] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [blockAlert, setBlockAlert] = useState<string[] | null>(null);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
+  const activeSessionIdRef = useRef<string | null>(null);
 
   const scrollToBottom = () => bottomRef.current?.scrollIntoView({ behavior: "smooth" });
 
-  const loadSessions = useCallback(async () => {
+  const resetChatView = useCallback(() => {
+    setMessages([]);
+    setStreaming("");
+    setStatus(null);
+    setBlockAlert(null);
+    setInput("");
+    setFiles([]);
+  }, []);
+
+  const loadSessions = useCallback(async (selectId?: string) => {
     const data = await listSessions();
     setSessions(data);
-    if (data.length && !activeSession) setActiveSession(data[0]);
-  }, [activeSession]);
+    if (selectId) {
+      const found = data.find((s) => s.id === selectId);
+      if (found) setActiveSession(found);
+    } else if (data.length && !activeSessionIdRef.current) {
+      setActiveSession(data[0]);
+    }
+  }, []);
 
   const loadMessages = useCallback(async (sessionId: string) => {
     const data = await listMessages(sessionId);
-    setMessages(data);
+    if (activeSessionIdRef.current === sessionId) {
+      setMessages(data);
+    }
   }, []);
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSession?.id ?? null;
+  }, [activeSession]);
 
   useEffect(() => {
     const init = async () => {
@@ -49,21 +74,51 @@ export default function ChatPage() {
   }, [loadSessions]);
 
   useEffect(() => {
-    if (activeSession) loadMessages(activeSession.id);
-  }, [activeSession, loadMessages]);
+    if (activeSession) {
+      resetChatView();
+      loadMessages(activeSession.id);
+    }
+  }, [activeSession?.id, loadMessages, resetChatView]);
 
   useEffect(scrollToBottom, [messages, streaming]);
+
+  const handleSelectSession = (session: Session) => {
+    if (session.id === activeSession?.id) return;
+    setActiveSession(session);
+  };
 
   const handleNewChat = async () => {
     const session = await createSession();
     setSessions((s) => [session, ...s]);
     setActiveSession(session);
-    setMessages([]);
-    setBlockAlert(null);
+  };
+
+  const handleRename = async (sessionId: string) => {
+    const title = editTitle.trim();
+    if (!title) {
+      setEditingSessionId(null);
+      return;
+    }
+    const updated = await updateSession(sessionId, title);
+    setSessions((s) => s.map((item) => (item.id === sessionId ? updated : item)));
+    if (activeSession?.id === sessionId) setActiveSession(updated);
+    setEditingSessionId(null);
+  };
+
+  const handleDelete = async (sessionId: string) => {
+    if (!confirm("Excluir este chat?")) return;
+    await deleteSession(sessionId);
+    const remaining = sessions.filter((s) => s.id !== sessionId);
+    setSessions(remaining);
+    if (activeSession?.id === sessionId) {
+      setActiveSession(remaining[0] ?? null);
+      if (!remaining.length) resetChatView();
+    }
   };
 
   const handleSend = async () => {
     if (!activeSession || !input.trim() || loading) return;
+    const sessionId = activeSession.id;
     setLoading(true);
     setBlockAlert(null);
     setStatus(null);
@@ -87,14 +142,16 @@ export default function ChatPage() {
     try {
       let accumulated = "";
       const result = await sendMessage(
-        activeSession.id,
+        sessionId,
         text,
         attached,
         (token) => {
+          if (activeSessionIdRef.current !== sessionId) return;
           accumulated += token;
           setStreaming(accumulated);
         },
         (data) => {
+          if (activeSessionIdRef.current !== sessionId) return;
           setMessages((m) => [
             ...m,
             {
@@ -109,9 +166,23 @@ export default function ChatPage() {
           ]);
           if (data.pii_redacted) setStatus("PII foi redigido antes do envio ao LLM");
           setStreaming("");
+          if (data.session_title) {
+            setSessions((s) =>
+              s.map((item) =>
+                item.id === sessionId ? { ...item, title: data.session_title! } : item
+              )
+            );
+            setActiveSession((current) =>
+              current?.id === sessionId ? { ...current, title: data.session_title! } : current
+            );
+          }
         },
-        (err) => setStatus(`Erro: ${err}`)
+        (err) => {
+          if (activeSessionIdRef.current === sessionId) setStatus(`Erro: ${err}`);
+        }
       );
+
+      if (activeSessionIdRef.current !== sessionId) return;
 
       if (result.blocked && result.reasons) {
         setBlockAlert(result.reasons);
@@ -120,9 +191,11 @@ export default function ChatPage() {
         );
       }
     } catch (err) {
-      setStatus(err instanceof Error ? err.message : "Erro ao enviar");
+      if (activeSessionIdRef.current === sessionId) {
+        setStatus(err instanceof Error ? err.message : "Erro ao enviar");
+      }
     } finally {
-      setLoading(false);
+      if (activeSessionIdRef.current === sessionId) setLoading(false);
     }
   };
 
@@ -141,13 +214,56 @@ export default function ChatPage() {
         </div>
         <nav className={styles.sessionList}>
           {sessions.map((s) => (
-            <button
+            <div
               key={s.id}
-              className={`${styles.sessionItem} ${activeSession?.id === s.id ? styles.active : ""}`}
-              onClick={() => setActiveSession(s)}
+              className={`${styles.sessionRow} ${activeSession?.id === s.id ? styles.active : ""}`}
             >
-              {s.title}
-            </button>
+              {editingSessionId === s.id ? (
+                <input
+                  className={styles.sessionEditInput}
+                  value={editTitle}
+                  autoFocus
+                  onChange={(e) => setEditTitle(e.target.value)}
+                  onBlur={() => handleRename(s.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleRename(s.id);
+                    if (e.key === "Escape") setEditingSessionId(null);
+                  }}
+                />
+              ) : (
+                <button
+                  className={styles.sessionItem}
+                  onClick={() => handleSelectSession(s)}
+                  onDoubleClick={() => {
+                    setEditingSessionId(s.id);
+                    setEditTitle(s.title);
+                  }}
+                >
+                  {s.title}
+                </button>
+              )}
+              <div className={styles.sessionActions}>
+                <button
+                  type="button"
+                  className={styles.sessionActionBtn}
+                  title="Renomear"
+                  onClick={() => {
+                    setEditingSessionId(s.id);
+                    setEditTitle(s.title);
+                  }}
+                >
+                  ✎
+                </button>
+                <button
+                  type="button"
+                  className={styles.sessionActionBtn}
+                  title="Excluir"
+                  onClick={() => handleDelete(s.id)}
+                >
+                  ×
+                </button>
+              </div>
+            </div>
           ))}
         </nav>
         <footer className={styles.sidebarFooter}>
@@ -156,95 +272,110 @@ export default function ChatPage() {
       </aside>
 
       <main className={styles.main}>
-        {blockAlert && (
-          <div className={styles.blockAlert}>
-            <strong>Credencial bloqueada</strong>
-            <ul>
-              {blockAlert.map((r, i) => (
-                <li key={i}>{r}</li>
-              ))}
-            </ul>
+        {!activeSession ? (
+          <div className={styles.emptyState}>
+            <p>Nenhum chat selecionado.</p>
+            <button className={styles.newChatBtn} onClick={handleNewChat}>
+              Criar novo chat
+            </button>
           </div>
-        )}
-
-        {status && <div className={styles.statusBanner}>{status}</div>}
-
-        <div className={styles.messages}>
-          {messages.map((m) => (
-            <div
-              key={m.id}
-              className={`${styles.message} ${m.role === "user" ? styles.user : styles.assistant}`}
-            >
-              <div className={styles.messageMeta}>
-                {m.role === "user" ? "Você" : "Assistente"}
-                {m.pii_redacted && <span className={styles.piiBadge}>PII redigido</span>}
-                {m.blocked && <span className={styles.blockBadge}>Bloqueado</span>}
+        ) : (
+          <>
+            {blockAlert && (
+              <div className={styles.blockAlert}>
+                <strong>Credencial bloqueada</strong>
+                <ul>
+                  {blockAlert.map((r, i) => (
+                    <li key={i}>{r}</li>
+                  ))}
+                </ul>
               </div>
-              <div className={styles.messageContent}>{m.content}</div>
-              {m.attachment_names.length > 0 && (
-                <div className={styles.attachments}>
-                  {m.attachment_names.map((n) => (
-                    <span key={n} className={styles.attachmentChip}>
-                      📎 {n}
+            )}
+
+            {status && <div className={styles.statusBanner}>{status}</div>}
+
+            <div className={styles.messages}>
+              {messages.map((m) => (
+                <div
+                  key={m.id}
+                  className={`${styles.message} ${m.role === "user" ? styles.user : styles.assistant}`}
+                >
+                  <div className={styles.messageMeta}>
+                    {m.role === "user" ? "Você" : "Assistente"}
+                    {m.pii_redacted && <span className={styles.piiBadge}>PII redigido</span>}
+                    {m.blocked && <span className={styles.blockBadge}>Bloqueado</span>}
+                  </div>
+                  <div className={styles.messageContent}>{m.content}</div>
+                  {m.attachment_names.length > 0 && (
+                    <div className={styles.attachments}>
+                      {m.attachment_names.map((n) => (
+                        <span key={n} className={styles.attachmentChip}>
+                          📎 {n}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+              {streaming && (
+                <div className={`${styles.message} ${styles.assistant}`}>
+                  <div className={styles.messageMeta}>Assistente</div>
+                  <div className={styles.messageContent}>{streaming}</div>
+                </div>
+              )}
+              <div ref={bottomRef} />
+            </div>
+
+            <div className={styles.composer}>
+              {files.length > 0 && (
+                <div className={styles.fileList}>
+                  {files.map((f) => (
+                    <span key={f.name} className={styles.attachmentChip}>
+                      📎 {f.name}
+                      <button
+                        type="button"
+                        onClick={() => setFiles((fs) => fs.filter((x) => x.name !== f.name))}
+                      >
+                        ×
+                      </button>
                     </span>
                   ))}
                 </div>
               )}
+              <div className={styles.composerRow}>
+                <label className={styles.attachBtn}>
+                  📎
+                  <input
+                    type="file"
+                    multiple
+                    hidden
+                    onChange={(e) => setFiles(Array.from(e.target.files || []))}
+                  />
+                </label>
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSend();
+                    }
+                  }}
+                  placeholder="Digite sua mensagem..."
+                  rows={2}
+                  disabled={loading}
+                />
+                <button
+                  className={styles.sendBtn}
+                  onClick={handleSend}
+                  disabled={loading || !input.trim()}
+                >
+                  {loading ? "..." : "Enviar"}
+                </button>
+              </div>
             </div>
-          ))}
-          {streaming && (
-            <div className={`${styles.message} ${styles.assistant}`}>
-              <div className={styles.messageMeta}>Assistente</div>
-              <div className={styles.messageContent}>{streaming}</div>
-            </div>
-          )}
-          <div ref={bottomRef} />
-        </div>
-
-        <div className={styles.composer}>
-          {files.length > 0 && (
-            <div className={styles.fileList}>
-              {files.map((f) => (
-                <span key={f.name} className={styles.attachmentChip}>
-                  📎 {f.name}
-                  <button
-                    type="button"
-                    onClick={() => setFiles((fs) => fs.filter((x) => x.name !== f.name))}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-          <div className={styles.composerRow}>
-            <label className={styles.attachBtn}>
-              📎
-              <input
-                type="file"
-                multiple
-                hidden
-                onChange={(e) => setFiles(Array.from(e.target.files || []))}
-              />
-            </label>
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-              placeholder="Digite sua mensagem..."
-              rows={2}
-              disabled={loading}
-            />
-            <button className={styles.sendBtn} onClick={handleSend} disabled={loading || !input.trim()}>
-              {loading ? "..." : "Enviar"}
-            </button>
-          </div>
-        </div>
+          </>
+        )}
       </main>
     </div>
   );

@@ -41,9 +41,24 @@
   padding: 0.5rem;
 }
 
+.sessionRow {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 6px;
+  margin-bottom: 2px;
+}
+
+.sessionRow:hover .sessionActions {
+  opacity: 1;
+}
+
+.sessionRow.active {
+  background: var(--surface-hover);
+}
+
 .sessionItem {
-  display: block;
-  width: 100%;
+  flex: 1;
   text-align: left;
   padding: 0.6rem 0.75rem;
   background: transparent;
@@ -51,17 +66,65 @@
   color: var(--text-muted);
   border-radius: 6px;
   font-size: 0.85rem;
-  margin-bottom: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .sessionItem:hover {
-  background: var(--surface-hover);
   color: var(--text);
 }
 
-.sessionItem.active {
-  background: var(--surface-hover);
+.sessionRow.active .sessionItem {
   color: var(--text);
+}
+
+.sessionActions {
+  display: flex;
+  gap: 0.1rem;
+  opacity: 0;
+  padding-right: 0.25rem;
+  transition: opacity 0.15s;
+}
+
+.sessionRow.active .sessionActions,
+.sessionRow:hover .sessionActions {
+  opacity: 1;
+}
+
+.sessionActionBtn {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  padding: 0.2rem 0.35rem;
+  border-radius: 4px;
+}
+
+.sessionActionBtn:hover {
+  background: var(--bg);
+  color: var(--text);
+}
+
+.sessionEditInput {
+  flex: 1;
+  margin: 0.35rem 0.5rem;
+  padding: 0.35rem 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.emptyState {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  color: var(--text-muted);
 }
 
 .sidebarFooter {

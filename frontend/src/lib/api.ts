@@ -66,6 +66,19 @@ export async function createSession(title = "New chat"): Promise<Session> {
   return res.json();
 }
 
+export async function updateSession(sessionId: string, title: string): Promise<Session> {
+  const res = await apiFetch(`/api/sessions/${sessionId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  return res.json();
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  await apiFetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
+}
+
 export async function listMessages(sessionId: string): Promise<Message[]> {
   const res = await apiFetch(`/api/sessions/${sessionId}/messages`);
   return res.json();
@@ -83,7 +96,7 @@ export async function sendMessage(
   content: string,
   files: File[],
   onToken: (text: string) => void,
-  onDone: (data: { content: string; pii_redacted: boolean }) => void,
+  onDone: (data: { content: string; pii_redacted: boolean; session_title?: string | null }) => void,
   onError: (msg: string) => void
 ): Promise<SendMessageResult> {
   const token = getToken();

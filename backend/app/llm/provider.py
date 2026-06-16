@@ -46,6 +46,49 @@ class MockLLMProvider(LLMProvider):
             await asyncio.sleep(0.02)
 
 
+class OllamaLLMProvider(LLMProvider):
+    def __init__(self) -> None:
+        self._base_url = settings.ollama_base_url.rstrip("/")
+        self._model = settings.ollama_model
+
+    @property
+    def model_name(self) -> str:
+        return f"ollama/{self._model}"
+
+    async def stream_completion(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        model: str | None = None,
+    ) -> AsyncIterator[str]:
+        import json
+
+        import httpx
+
+        payload = {
+            "model": model or self._model,
+            "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
+            "stream": True,
+        }
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=10.0)) as client:
+            async with client.stream(
+                "POST",
+                f"{self._base_url}/api/chat",
+                json=payload,
+            ) as response:
+                response.raise_for_status()
+                async for line in response.aiter_lines():
+                    if not line:
+                        continue
+                    data = json.loads(line)
+                    if data.get("done"):
+                        break
+                    content = data.get("message", {}).get("content", "")
+                    if content:
+                        yield content
+
+
 class BedrockLLMProvider(LLMProvider):
     def __init__(self) -> None:
         import boto3
@@ -102,6 +145,8 @@ class BedrockLLMProvider(LLMProvider):
 
 def get_llm_provider() -> LLMProvider:
     provider = settings.llm_provider.lower()
+    if provider == "ollama":
+        return OllamaLLMProvider()
     if provider == "bedrock":
         return BedrockLLMProvider()
     return MockLLMProvider()
