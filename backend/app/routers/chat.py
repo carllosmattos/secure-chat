@@ -1,0 +1,196 @@
+from __future__ import annotations
+
+import json
+import time
+import uuid
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
+
+from app.auth import AuthUser, create_access_token, get_current_user
+from app.database import get_db
+from app.llm.provider import get_llm_provider
+from app.models import Message, User
+from app.schemas import (
+    AuthTokenResponse,
+    BlockedResponse,
+    DevLoginRequest,
+    MessageOut,
+    SessionCreate,
+    SessionOut,
+)
+from app.services import chat as chat_service
+from app.services.pipeline import PipelineBlockError, process_message_pipeline
+from app.services.quota import QuotaExceededError, check_and_increment_quota
+from app.services.vault import rehydrate, vault
+
+router = APIRouter(prefix="/api", tags=["chat"])
+
+
+@router.post("/auth/dev-login", response_model=AuthTokenResponse)
+async def dev_login(body: DevLoginRequest, db: AsyncSession = Depends(get_db)):
+    from sqlalchemy import select
+
+    result = await db.execute(select(User).where(User.email == body.email))
+    user = result.scalar_one_or_none()
+    if not user:
+        user = User(email=body.email, display_name=body.display_name)
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+    token = create_access_token(user.id, user.email)
+    return AuthTokenResponse(access_token=token)
+
+
+@router.get("/sessions", response_model=list[SessionOut])
+async def get_sessions(user: AuthUser = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+    return await chat_service.list_sessions(db, user)
+
+
+@router.post("/sessions", response_model=SessionOut)
+async def create_session(
+    body: SessionCreate,
+    user: AuthUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    return await chat_service.create_session(db, user, body.title)
+
+
+@router.get("/sessions/{session_id}/messages", response_model=list[MessageOut])
+async def get_messages(
+    session_id: uuid.UUID,
+    user: AuthUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await chat_service.get_session(db, user, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+    messages = await chat_service.list_messages(db, session_id)
+    mapping = vault.get_all(session_id)
+    return [
+        MessageOut(
+            id=m.id,
+            role=m.role,
+            content=rehydrate(m.content_redacted, mapping),
+            pii_redacted=m.pii_redacted,
+            blocked=m.blocked,
+            attachment_names=m.attachment_names or [],
+            created_at=m.created_at,
+        )
+        for m in messages
+    ]
+
+
+@router.post("/sessions/{session_id}/messages")
+async def send_message(
+    session_id: uuid.UUID,
+    content: str = Form(...),
+    files: list[UploadFile] = File(default=[]),
+    user: AuthUser = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    session = await chat_service.get_session(db, user, session_id)
+    if not session:
+        raise HTTPException(404, "Session not found")
+
+    try:
+        await check_and_increment_quota(db, user.id)
+    except QuotaExceededError as exc:
+        raise HTTPException(429, str(exc)) from exc
+
+    file_tuples: list[tuple[str, bytes]] = []
+    for f in files:
+        if f.filename:
+            file_tuples.append((f.filename, await f.read()))
+
+    start = time.perf_counter()
+    try:
+        pipeline = await process_message_pipeline(session_id, content, file_tuples)
+    except PipelineBlockError as exc:
+        await chat_service.log_audit(
+            db,
+            user.id,
+            session_id,
+            event_type="message_blocked",
+            prompt_hash="",
+            pii_counts={},
+            model="",
+            latency_ms=int((time.perf_counter() - start) * 1000),
+            attachment_count=len(file_tuples),
+            decision="block",
+            metadata={"reasons": exc.reasons},
+        )
+        blocked_msg = Message(
+            session_id=session_id,
+            role="user",
+            content_redacted="[BLOCKED — sensitive content detected]",
+            blocked=True,
+            attachment_names=[n for n, _ in file_tuples],
+        )
+        db.add(blocked_msg)
+        await db.commit()
+        return BlockedResponse(reasons=exc.reasons, findings_summary=exc.findings_summary)
+
+    user_msg = Message(
+        session_id=session_id,
+        role="user",
+        content_redacted=pipeline.redacted_text,
+        pii_redacted=pipeline.pii_redacted,
+        attachment_names=pipeline.attachment_names,
+    )
+    db.add(user_msg)
+    await db.commit()
+
+    llm = get_llm_provider()
+    history = await chat_service.list_messages(db, session_id)
+    llm_messages = [{"role": m.role, "content": m.content_redacted} for m in history]
+    llm_messages.append({"role": "user", "content": pipeline.redacted_text})
+
+    async def event_generator():
+        full_response = ""
+        try:
+            async for chunk in llm.stream_completion(llm_messages):
+                full_response += chunk
+                yield {"event": "token", "data": json.dumps({"text": chunk})}
+        except Exception as exc:
+            yield {"event": "error", "data": json.dumps({"message": str(exc)})}
+            return
+
+        assistant_msg = Message(
+            session_id=session_id,
+            role="assistant",
+            content_redacted=full_response,
+        )
+        db.add(assistant_msg)
+        await db.commit()
+
+        mapping = vault.get_all(session_id)
+        rehydrated = rehydrate(full_response, mapping)
+
+        latency = int((time.perf_counter() - start) * 1000)
+        await chat_service.log_audit(
+            db,
+            user.id,
+            session_id,
+            event_type="message_sent",
+            prompt_hash=pipeline.prompt_hash,
+            pii_counts=pipeline.pii_counts,
+            model=llm.model_name,
+            latency_ms=latency,
+            attachment_count=len(file_tuples),
+            decision="redact" if pipeline.pii_redacted else "allow",
+        )
+
+        yield {
+            "event": "done",
+            "data": json.dumps(
+                {
+                    "message_id": str(assistant_msg.id),
+                    "content": rehydrated,
+                    "pii_redacted": pipeline.pii_redacted,
+                }
+            ),
+        }
+
+    return EventSourceResponse(event_generator())
