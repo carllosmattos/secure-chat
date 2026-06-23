@@ -62,12 +62,19 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
 
+    # OpenAI-compat model pool (comma-separated). Used when LLM_PROVIDER=openai.
+    llm_models: str = ""
+    llm_model_strategy: str = "manual"  # manual | round_robin | random | failover
+
     max_attachment_bytes: int = 10 * 1024 * 1024
     max_attachments: int = 5
     ocr_timeout_seconds: int = 30
 
     daily_message_quota: int = 100
     security_profile: str = "pii-redact"
+
+    # Comma-separated browser origins allowed by CORS (e.g. Docker frontend URL).
+    cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001"
 
 
 settings = Settings()

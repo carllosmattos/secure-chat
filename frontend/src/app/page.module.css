@@ -9,6 +9,41 @@
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
+  flex-shrink: 0;
+  transition: width 0.2s ease;
+}
+
+.sidebarCollapsed {
+  width: 56px;
+}
+
+.sidebarTopRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.sidebarCollapsed .sidebarTopRow {
+  justify-content: center;
+  margin-bottom: 0.5rem;
+}
+
+.collapseBtn {
+  background: var(--surface-hover);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  border-radius: 6px;
+  width: 28px;
+  height: 28px;
+  font-size: 0.85rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.collapseBtn:hover {
+  color: var(--text);
 }
 
 .sidebarHeader {
@@ -18,7 +53,7 @@
 
 .sidebarHeader h1 {
   font-size: 1.1rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0;
 }
 
 .newChatBtn {
@@ -65,27 +100,102 @@
   padding: 0.5rem;
 }
 
+.sessionRow {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  border-radius: 6px;
+  margin-bottom: 2px;
+}
+
+.sessionRow:hover {
+  background: var(--surface-hover);
+}
+
+.sessionRow.active {
+  background: var(--surface-hover);
+}
+
 .sessionItem {
-  display: block;
-  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
   text-align: left;
-  padding: 0.6rem 0.75rem;
+  padding: 0.6rem 0.5rem;
   background: transparent;
   border: none;
   color: var(--text-muted);
   border-radius: 6px;
   font-size: 0.85rem;
-  margin-bottom: 2px;
 }
 
 .sessionItem:hover {
-  background: var(--surface-hover);
   color: var(--text);
 }
 
-.sessionItem.active {
-  background: var(--surface-hover);
+.sessionRow.active .sessionItem {
   color: var(--text);
+}
+
+.sessionTitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pinIcon {
+  font-size: 0.7rem;
+  flex-shrink: 0;
+}
+
+.sessionActions {
+  display: none;
+  gap: 0.1rem;
+  padding-right: 0.25rem;
+  flex-shrink: 0;
+}
+
+.sessionRow:hover .sessionActions {
+  display: flex;
+}
+
+.sessionActionBtn {
+  background: transparent;
+  border: none;
+  font-size: 0.75rem;
+  padding: 0.2rem;
+  opacity: 0.6;
+  line-height: 1;
+}
+
+.sessionActionBtn:hover {
+  opacity: 1;
+}
+
+.sessionActionBtn.pinned {
+  opacity: 1;
+}
+
+.sessionRenameInput {
+  flex: 1;
+  margin: 0.25rem;
+  padding: 0.45rem 0.5rem;
+  background: var(--bg);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: var(--text);
+  font-size: 0.85rem;
+}
+
+.sidebarCollapsed .sessionItem {
+  justify-content: center;
+  padding: 0.6rem 0;
+}
+
+.sidebarCollapsed .sessionTitle {
+  font-weight: 600;
 }
 
 .sidebarFooter {
@@ -128,12 +238,17 @@
   padding: 0.75rem 1rem;
   border-radius: 10px;
   line-height: 1.5;
-  white-space: pre-wrap;
   word-break: break-word;
 }
 
 .user .messageContent {
   background: #1e3a5f;
+}
+
+.errorMessage .messageContent {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
 }
 
 .messageMeta {

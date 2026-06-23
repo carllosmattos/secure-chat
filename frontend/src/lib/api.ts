@@ -1,5 +1,8 @@
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/** Sentinel value: let the backend pick (balance / default). */
+export const MODEL_AUTO = "auto";
+
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return localStorage.getItem("secure_chat_token");
@@ -38,6 +41,7 @@ export interface Session {
   id: string;
   title: string;
   mode: string;
+  pinned: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -48,6 +52,7 @@ export interface Message {
   content: string;
   pii_redacted: boolean;
   blocked: boolean;
+  is_error?: boolean;
   attachment_names: string[];
   created_at: string;
 }
@@ -63,6 +68,9 @@ export interface ProvidersResponse {
   auto_strategy: string;
   auto_providers: string[];
   providers: ProviderInfo[];
+  default_model?: string;
+  models?: string[];
+  strategy?: string;
 }
 
 export async function listProviders(): Promise<ProvidersResponse> {
@@ -75,7 +83,30 @@ export async function listSessions(): Promise<Session[]> {
   return res.json();
 }
 
-export async function createSession(title = "New chat"): Promise<Session> {
+
+export function sortSessions(list: Session[]): Session[] {
+  return [...list].sort((a, b) => {
+    if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
+    return new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime();
+  });
+}
+
+export async function updateSession(
+  sessionId: string,
+  patch: { title?: string; pinned?: boolean }
+): Promise<Session> {
+  const res = await apiFetch(`/api/sessions/${sessionId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  return res.json();
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  await apiFetch(`/api/sessions/${sessionId}`, { method: "DELETE" });
+}
+export async function createSession(title = "Novo chat"): Promise<Session> {
   const res = await apiFetch("/api/sessions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -96,12 +127,21 @@ export interface SendMessageResult {
   stream?: boolean;
 }
 
+export interface StreamDonePayload {
+  content: string;
+  pii_redacted: boolean;
+  model?: string;
+  message_id?: string;
+  title?: string;
+  is_error?: boolean;
+}
+
 export async function sendMessage(
   sessionId: string,
   content: string,
   files: File[],
   onToken: (text: string) => void,
-  onDone: (data: { content: string; pii_redacted: boolean }) => void,
+  onDone: (data: StreamDonePayload) => void,
   onError: (msg: string) => void,
   provider?: string,
   model?: string
@@ -161,4 +201,22 @@ export async function sendMessage(
   }
 
   return { stream: true };
+}
+
+export function shortModelLabel(modelId: string): string {
+  const slug = modelId.split("/").pop() || modelId;
+  return slug.replace(/:free$/, " (free)");
+}
+
+export function strategyLabel(strategy: string): string {
+  switch (strategy) {
+    case "round_robin":
+      return "balanceado";
+    case "random":
+      return "aleatório";
+    case "failover":
+      return "failover";
+    default:
+      return "padrão";
+  }
 }

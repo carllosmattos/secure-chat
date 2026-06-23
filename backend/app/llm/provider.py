@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any, Callable
 
 from app.config import settings
+from app.llm.http_errors import format_http_error, is_openrouter_base_url
 
 
 class LLMProvider(ABC):
@@ -178,9 +179,13 @@ class OpenAICompatLLMProvider(LLMProvider):
         headers = {"Content-Type": "application/json"}
         if self._api_key:
             headers["Authorization"] = f"Bearer {self._api_key}"
+        if is_openrouter_base_url(self._base_url):
+            headers.setdefault("HTTP-Referer", "http://localhost:3000")
+            headers.setdefault("X-OpenRouter-Title", "Secure Chat")
 
+        model_id = model or self._model
         payload = {
-            "model": model or self._model,
+            "model": model_id,
             "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
             "stream": True,
         }
@@ -189,7 +194,11 @@ class OpenAICompatLLMProvider(LLMProvider):
             async with client.stream(
                 "POST", f"{self._base_url}/chat/completions", json=payload, headers=headers
             ) as response:
-                response.raise_for_status()
+                if response.is_error:
+                    body = await response.aread()
+                    raise RuntimeError(
+                        format_http_error(response.status_code, body, model=model_id)
+                    )
                 async for line in response.aiter_lines():
                     line = line.strip()
                     if not line or not line.startswith("data:"):
